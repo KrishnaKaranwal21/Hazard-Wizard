@@ -19,8 +19,6 @@ import joblib
 
 from model_experiments import WeatherDataPipeline, TelemetryAutoencoder, FEATURE_COLUMNS
 
-# One representative city per state/UT (roughly), chosen for climate spread:
-# coastal, arid, alpine, tropical wet, continental, plateau, island, northeastern.
 CITIES = {
     "Mumbai": (19.0760, 72.8777), "Delhi": (28.7041, 77.1025),
     "Bengaluru": (12.9716, 77.5946), "Chennai": (13.0827, 80.2707),
