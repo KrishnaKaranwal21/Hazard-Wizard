@@ -1,6 +1,6 @@
 # 🌦️ Hazard Wizard
 
-**Real-time weather hazard monitoring for India, powered by a live weather feed and an AI anomaly-detection model trained across 50 cities.**
+**Real-time weather hazard monitoring for India, powered by a live weather feed and an AI anomaly-detection model trained across Indian cities.**
 
 Hazard Wizard combines two independent layers of hazard detection: fast, transparent **rule-based thresholds** for known danger signs, and a **PyTorch autoencoder** that learns what "normal" weather looks like for any location and season in India — and flags conditions that don't fit, even when no single rule catches them.
 
@@ -30,7 +30,6 @@ Hazard Wizard combines two independent layers of hazard detection: fast, transpa
 Type or search any location in India and Hazard Wizard shows:
 
 - **Live weather telemetry** — temperature, humidity, wind, pressure, precipitation, and cloud cover, sourced from [Open-Meteo](https://open-meteo.com).
-- **Rule-based hazard signals** — clear, explainable alerts for known danger patterns (extreme heat, high wind gusts, heavy precipitation, etc.).
 - **AI anomaly detection** — a trained autoencoder scores how unusual the current conditions are for that location *and* time of year, with SHAP-based explanations for *why* something was flagged.
 
 The two systems are intentionally complementary rather than redundant: rules catch known, well-understood danger thresholds; the model catches statistically unusual combinations of conditions that don't necessarily trip any single rule — including for locations the model was never explicitly trained on.
@@ -38,10 +37,9 @@ The two systems are intentionally complementary rather than redundant: rules cat
 ## How it works
 
 1. You pick or search a location. The frontend fetches live conditions directly from Open-Meteo.
-2. Rule-based thresholds run **client-side**, instantly, against that reading.
-3. In parallel, the same reading (plus the location's coordinates and the current month) is sent server-side to a FastAPI service wrapping the trained PyTorch autoencoder.
-4. The autoencoder tries to reconstruct the input. A reading that reconstructs poorly — i.e. doesn't look like anything the model learned as "normal" — gets flagged as an anomaly, with SHAP identifying which features contributed most.
-5. Because the model was trained on latitude, longitude, and a cyclical month encoding *alongside* the weather variables, it doesn't need a fixed threshold per city — it learns a continuous sense of what's typical for a given place and season, and generalizes to locations outside its original 50-city training set by nearest-neighbor similarity in the learned space.
+2. In parallel, the same reading (plus the location's coordinates and the current month) is sent server-side to a FastAPI service wrapping the trained PyTorch autoencoder.
+3. The autoencoder tries to reconstruct the input. A reading that reconstructs poorly — i.e. doesn't look like anything the model learned as "normal" — gets flagged as an anomaly, with SHAP identifying which features contributed most.
+4. Because the model was trained on latitude, longitude, and a cyclical month encoding *alongside* the weather variables, it doesn't need a fixed threshold per city — it learns a continuous sense of what's typical for a given place and season, and generalizes to locations outside its original 50-city training set by nearest-neighbor similarity in the learned space.
 
 ## Architecture
 
