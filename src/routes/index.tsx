@@ -201,7 +201,7 @@ function Dashboard() {
         <header className="topbar">
           <div className="brand-lockup">
             <div className="brand-mark" aria-hidden="true">
-              <ShieldCheck size={22} strokeWidth={2.2} />
+              <img src="/logo.jpg" alt="" className="brand-logo" />
             </div>
             <div>
               <p className="eyebrow">Environmental intelligence</p>
