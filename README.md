@@ -99,6 +99,7 @@ Hazard-Wizard/
 │   │   ├── error-capture.ts
 │   │   ├── error-page.ts
 │   │   ├── hazard-ml.ts
+│   │   ├── place-autocomplete.ts
 │   │   └── weather.ts
 │   ├── routes/
 │   │   ├── __root.tsx
@@ -179,6 +180,7 @@ The full training run takes several minutes, most of it in the historical data f
 |---|---|
 | `ML_API_URL` | Base URL of the deployed FastAPI ML service |
 | `ML_API_KEY` | Shared secret sent with each request to the ML service |
+| `GOOGLE_PLACES_API_KEY` | Optional server-side Google Places API key for place predictions; Open-Meteo search is used when absent |
 
 These are intentionally **not** prefixed with `VITE_` — they're read inside a server function that never ships to the browser bundle, so the ML service's URL and key stay server-side only.
 

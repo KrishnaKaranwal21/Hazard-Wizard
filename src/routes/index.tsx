@@ -9,16 +9,23 @@ import {
   Gauge,
   LocateFixed,
   MapPin,
+  Moon,
   RefreshCw,
   Search,
   ShieldCheck,
+  Sun,
   ThermometerSun,
   Wind,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import {
+  getGooglePlaceLocation,
+  getPlacePredictions,
+  type PlacePrediction,
+} from "@/lib/place-autocomplete";
 import {
   describeWeather,
   fetchWeather,
@@ -61,6 +68,7 @@ type Hazard = {
 };
 
 type TimeMode = "morning" | "day" | "evening" | "night";
+type Appearance = "dark" | "light";
 
 function Dashboard() {
   const [location, setLocation] = useState<Location>(defaultLocation);
@@ -71,7 +79,14 @@ function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
-  const [clock, setClock] = useState(() => new Date());
+  const [isPredicting, setIsPredicting] = useState(false);
+  const [placePredictions, setPlacePredictions] = useState<PlacePrediction[]>([]);
+  const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null);
+  const [appearance, setAppearance] = useState<Appearance>("dark");
+  const [clock, setClock] = useState<Date | null>(null);
+  const predictionRequestRef = useRef(0);
+  const suppressPredictionsRef = useRef(true);
+  const placesSessionRef = useRef(createPlacesSession());
 
   const refresh = useCallback(
     async (target: Location = location) => {
@@ -98,11 +113,78 @@ function Dashboard() {
   }, [location, refresh]);
 
   useEffect(() => {
-    const clockId = window.setInterval(() => setClock(new Date()), 1_000);
+    const syncClock = () => setClock(new Date());
+    syncClock();
+    const clockId = window.setInterval(syncClock, 1_000);
     return () => window.clearInterval(clockId);
   }, []);
 
+  useEffect(() => {
+    const savedAppearance = window.localStorage.getItem("hazardwatch-appearance");
+    if (savedAppearance === "dark" || savedAppearance === "light") setAppearance(savedAppearance);
+  }, []);
+
+  useEffect(() => {
+    if (suppressPredictionsRef.current) {
+      suppressPredictionsRef.current = false;
+      return;
+    }
+
+    const query = placeQuery.trim();
+    if (query.length < 2) {
+      predictionRequestRef.current += 1;
+      setIsPredicting(false);
+      setPlacePredictions([]);
+      setGoogleConfigured(null);
+      return;
+    }
+
+    const requestId = predictionRequestRef.current + 1;
+    predictionRequestRef.current = requestId;
+    const timeoutId = window.setTimeout(() => {
+      void getPlacePredictions({
+        data: { query, sessionToken: placesSessionRef.current },
+      })
+        .then((result) => {
+          if (predictionRequestRef.current !== requestId) return;
+          setPlacePredictions(result.predictions);
+          setGoogleConfigured(result.googleConfigured);
+        })
+        .catch(async () => {
+          try {
+            const matches = await searchLocations(query);
+            if (predictionRequestRef.current !== requestId) return;
+            setGoogleConfigured(false);
+            setPlacePredictions(
+              matches.map((match, index) => ({
+                id: `${match.latitude}:${match.longitude}:${index}`,
+                label: locationLabel(match),
+                provider: "fallback" as const,
+                location: match,
+              })),
+            );
+          } catch {
+            if (predictionRequestRef.current !== requestId) return;
+            setPlacePredictions([]);
+          }
+        })
+        .finally(() => {
+          if (predictionRequestRef.current === requestId) setIsPredicting(false);
+        });
+      setIsPredicting(true);
+    }, 280);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (predictionRequestRef.current === requestId) predictionRequestRef.current += 1;
+    };
+  }, [placeQuery]);
+
   const updateLocation = (next: Location) => {
+    suppressPredictionsRef.current = true;
+    predictionRequestRef.current += 1;
+    setPlacePredictions([]);
+    setGoogleConfigured(null);
     setSnapshot(null);
     setLocation(next);
     setPlaceQuery(next.name);
@@ -118,6 +200,7 @@ function Dashboard() {
       return;
     }
     setIsSearching(true);
+    setPlacePredictions([]);
     setError(null);
     try {
       const results = await searchLocations(term);
@@ -132,6 +215,34 @@ function Dashboard() {
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const choosePrediction = async (prediction: PlacePrediction) => {
+    setIsSearching(true);
+    setError(null);
+    try {
+      const next =
+        prediction.provider === "google"
+          ? await getGooglePlaceLocation({
+              data: { placeId: prediction.id, sessionToken: placesSessionRef.current },
+            })
+          : prediction.location;
+      if (!next) throw new Error("That prediction no longer has a usable location.");
+      updateLocation(next);
+      placesSessionRef.current = createPlacesSession();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "That place could not be selected.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const toggleAppearance = () => {
+    setAppearance((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem("hazardwatch-appearance", next);
+      return next;
+    });
   };
 
   const submitCoordinates = (event: React.FormEvent<HTMLFormElement>) => {
@@ -190,10 +301,19 @@ function Dashboard() {
   const nextWetHour = snapshot?.hourly.find(
     (hour) => hour.precipitationProbability >= 40 || hour.precipitation > 0.2,
   );
-  const timeMode = getTimeMode(clock, snapshot?.timezone);
+  const peakPrecipitationChance = Math.max(
+    0,
+    ...(snapshot?.hourly.map((hour) => hour.precipitationProbability) ?? []),
+  );
+  const peakForecastWind = Math.max(0, ...(snapshot?.hourly.map((hour) => hour.windSpeed) ?? []));
+  const forecastTemperatures = snapshot?.hourly.map((hour) => hour.temperature) ?? [];
+  const forecastTemperatureRange = forecastTemperatures.length
+    ? `${Math.min(...forecastTemperatures).toFixed(0)}–${Math.max(...forecastTemperatures).toFixed(0)}°C`
+    : "Unavailable";
+  const timeMode = clock ? getTimeMode(clock, snapshot?.timezone) : "night";
 
   return (
-    <main className={`hazard-app mode-${timeMode}`}>
+    <main className={`hazard-app mode-${timeMode} appearance-${appearance}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
 
@@ -214,15 +334,28 @@ function Dashboard() {
           <div className="topbar-meta">
             <div className="local-time">
               <span className="meta-label">Current local time</span>
-              <strong>{formatClock(clock, snapshot?.timezone)}</strong>
+              <strong>{clock ? formatClock(clock, snapshot?.timezone) : "--:--:--"}</strong>
               <span>
-                {formatDate(clock, snapshot?.timezone)} · {timeMode} mode
+                {clock
+                  ? `${formatDate(clock, snapshot?.timezone)} · ${timeMode} mode`
+                  : "Loading local time…"}
               </span>
             </div>
             <div className="live-indicator" aria-label="Live data updates every minute">
               <span className="live-dot" />
               <span>{isRefreshing ? "SYNCING" : "LIVE DATA"}</span>
             </div>
+            <button
+              className="appearance-toggle"
+              type="button"
+              onClick={toggleAppearance}
+              aria-pressed={appearance === "light"}
+              aria-label={`Switch to ${appearance === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${appearance === "dark" ? "light" : "dark"} mode`}
+            >
+              {appearance === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+              <span>{appearance === "dark" ? "Light" : "Dark"}</span>
+            </button>
           </div>
         </header>
 
@@ -264,11 +397,44 @@ function Dashboard() {
                 value={placeQuery}
                 onChange={(event) => setPlaceQuery(event.target.value)}
                 placeholder="Search city or region"
+                autoComplete="off"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={placePredictions.length > 0}
+                aria-controls="place-predictions"
               />
               <button className="primary-button" type="submit" disabled={isSearching}>
                 {isSearching ? "Finding…" : "Search"}
               </button>
             </div>
+            {(isPredicting || placePredictions.length > 0) && (
+              <div className="prediction-popover">
+                <div className="prediction-meta">
+                  <span>{isPredicting ? "Finding places…" : "Place predictions"}</span>
+                  {!isPredicting &&
+                    (googleConfigured ? (
+                      <span translate="no">Google Maps</span>
+                    ) : (
+                      <span>Location search</span>
+                    ))}
+                </div>
+                {placePredictions.length > 0 && (
+                  <ul id="place-predictions" className="place-predictions" role="listbox">
+                    {placePredictions.map((prediction) => (
+                      <li key={`${prediction.provider}-${prediction.id}`}>
+                        <button type="button" onClick={() => void choosePrediction(prediction)}>
+                          <MapPin size={15} aria-hidden="true" />
+                          <span>{prediction.label}</span>
+                          {prediction.provider === "google" && (
+                            <small translate="no">Google Maps</small>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </form>
           <div className="control-divider" />
           <form className="coordinate-form" onSubmit={submitCoordinates}>
@@ -342,23 +508,56 @@ function Dashboard() {
             {snapshot && (
               <details className="more-details">
                 <summary>
-                  More metrics <ChevronDown size={14} aria-hidden="true" />
+                  Detailed briefing <ChevronDown size={14} aria-hidden="true" />
                 </summary>
                 <div className="details-menu">
+                  <div className="details-menu-heading">
+                    <span>Live weather detail</span>
+                    <strong>{formatTimestamp(snapshot.observedAt, snapshot.timezone)}</strong>
+                  </div>
+                  <DetailItem label="Temperature" value={`${snapshot.temperature.toFixed(1)}°C`} />
                   <DetailItem
                     label="Feels like"
                     value={`${snapshot.apparentTemperature.toFixed(1)}°C`}
                   />
+                  <DetailItem label="Current state" value={describeWeather(snapshot.weatherCode)} />
+                  <DetailItem label="Humidity" value={`${snapshot.humidity.toFixed(0)}%`} />
+                  <DetailItem
+                    label="Precipitation now"
+                    value={`${snapshot.precipitation.toFixed(1)} mm`}
+                  />
                   <DetailItem label="Rain now" value={`${snapshot.rain.toFixed(1)} mm`} />
+                  <DetailItem label="Wind speed" value={`${snapshot.windSpeed.toFixed(0)} km/h`} />
                   <DetailItem label="Wind gusts" value={`${snapshot.windGusts.toFixed(0)} km/h`} />
                   <DetailItem
                     label="Wind direction"
                     value={`${directionLabel(snapshot.windDirection)} · ${snapshot.windDirection.toFixed(0)}°`}
                   />
-                  <DetailItem label="Current state" value={describeWeather(snapshot.weatherCode)} />
+                  <DetailItem
+                    label="Surface pressure"
+                    value={`${snapshot.pressure.toFixed(0)} hPa`}
+                  />
+                  <DetailItem label="Time zone" value={snapshot.timezoneAbbreviation} />
                   <DetailItem
                     label="24h rain outlook"
-                    value={`${forecastRain.toFixed(1)} mm · up to ${Math.max(...snapshot.hourly.map((hour) => hour.precipitationProbability)).toFixed(0)}%`}
+                    value={`${forecastRain.toFixed(1)} mm total`}
+                  />
+                  <DetailItem
+                    label="Peak rain chance"
+                    value={`${peakPrecipitationChance.toFixed(0)}% over 24h`}
+                  />
+                  <DetailItem label="Forecast temperature" value={forecastTemperatureRange} />
+                  <DetailItem
+                    label="Peak forecast wind"
+                    value={`${peakForecastWind.toFixed(0)} km/h`}
+                  />
+                  <DetailItem
+                    label="Next wet period"
+                    value={
+                      nextWetHour
+                        ? `${formatHour(nextWetHour.time, snapshot.timezone)} · ${nextWetHour.precipitationProbability.toFixed(0)}%`
+                        : "No notable signal"
+                    }
                   />
                 </div>
               </details>
@@ -413,6 +612,34 @@ function Dashboard() {
                 note={`Wind ${directionLabel(snapshot.windDirection)}`}
                 tone="pressure"
               />
+            </section>
+
+            <section className="panel alerts-panel hazard-priority">
+              <div className="panel-heading">
+                <div>
+                  <p className="panel-eyebrow">Rule-based monitor</p>
+                  <h2>Hazard signals</h2>
+                </div>
+                <Activity size={25} className="heading-icon" />
+              </div>
+              {hazards.length ? (
+                <div className="hazard-list">
+                  {hazards.map((hazard) => (
+                    <HazardRow key={hazard.title} hazard={hazard} />
+                  ))}
+                </div>
+              ) : (
+                <div className="clear-state">
+                  <ShieldCheck size={24} />
+                  <div>
+                    <strong>No thresholds are exceeded.</strong>
+                    <span>
+                      Temperature, precipitation, wind, and pressure are currently within the
+                      monitor’s baseline range.
+                    </span>
+                  </div>
+                </div>
+              )}
             </section>
 
             <section className="content-grid">
@@ -475,35 +702,7 @@ function Dashboard() {
               </section>
             </section>
 
-            <section className="bottom-grid">
-              <section className="panel alerts-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="panel-eyebrow">Rule-based monitor</p>
-                    <h2>Hazard signals</h2>
-                  </div>
-                  <Activity size={25} className="heading-icon" />
-                </div>
-                {hazards.length ? (
-                  <div className="hazard-list">
-                    {hazards.map((hazard) => (
-                      <HazardRow key={hazard.title} hazard={hazard} />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="clear-state">
-                    <ShieldCheck size={24} />
-                    <div>
-                      <strong>No thresholds are exceeded.</strong>
-                      <span>
-                        Temperature, precipitation, wind, and pressure are currently within the
-                        monitor’s baseline range.
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </section>
-
+            <section className="bottom-grid anomaly-grid">
               <section className="panel ml-panel">
                 <div className="panel-heading">
                   <div>
@@ -565,7 +764,7 @@ function Dashboard() {
             HazardWatch provides weather-awareness signals, not official emergency warnings.
           </span>
           <span>
-            Last interface refresh: {formatTimestamp(clock.getTime(), snapshot?.timezone)}
+            Last interface refresh: {clock ? formatTimestamp(clock.getTime(), snapshot?.timezone) : "Loading…"}
           </span>
         </footer>
       </section>
@@ -795,6 +994,11 @@ function getTimeMode(date: Date, timezone = "UTC"): TimeMode {
   if (hour >= 11 && hour < 17) return "day";
   if (hour >= 17 && hour < 21) return "evening";
   return "night";
+}
+
+function createPlacesSession(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function directionLabel(degrees: number): string {
