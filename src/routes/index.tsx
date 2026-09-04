@@ -27,6 +27,7 @@ import {
   type WeatherSnapshot,
 } from "@/lib/weather";
 import { getHazardAssessment } from "@/lib/hazard-ml";
+import { assessmentFromLive, demoScenarios, type CloudSentinelAssessment } from "@/lib/cloudsentinel";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -72,6 +73,7 @@ function Dashboard() {
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [clock, setClock] = useState(() => new Date());
+  const [demoScenario, setDemoScenario] = useState("live");
 
   const refresh = useCallback(
     async (target: Location = location) => {
@@ -191,6 +193,10 @@ function Dashboard() {
     (hour) => hour.precipitationProbability >= 40 || hour.precipitation > 0.2,
   );
   const timeMode = getTimeMode(clock, snapshot?.timezone);
+  const cloudSentinel = useMemo<CloudSentinelAssessment | null>(() => {
+    if (!snapshot) return null;
+    return demoScenario === "live" ? assessmentFromLive(snapshot) : demoScenarios[demoScenario] ?? assessmentFromLive(snapshot);
+  }, [snapshot, demoScenario]);
 
   return (
     <main className={`hazard-app mode-${timeMode}`}>
@@ -300,6 +306,14 @@ function Dashboard() {
               Apply
             </button>
           </form>
+        </section>
+
+        <section className="simulation-controls" aria-label="CloudSentinel demonstration controls">
+          <div><p className="panel-eyebrow">Demo / simulation</p><span>Live Open-Meteo data remains available above. Simulations affect CloudSentinel assessment panels only.</span></div>
+          <label htmlFor="scenario">Assessment scenario</label>
+          <select id="scenario" value={demoScenario} onChange={(event) => setDemoScenario(event.target.value)}>
+            <option value="live">Live forecast assessment</option><option value="normal">Normal weather</option><option value="rain">Heavy rainfall warning</option><option value="wind">High wind warning</option><option value="sensor">Temperature sensor spike</option><option value="multiple">Multiple abnormal conditions</option>
+          </select>
         </section>
 
         {error && (
@@ -415,6 +429,8 @@ function Dashboard() {
               />
             </section>
 
+            {cloudSentinel && <CloudSentinelPanels assessment={cloudSentinel} location={snapshot.location} />}
+
             <section className="content-grid">
               <section className="panel weather-panel">
                 <div className="panel-heading">
@@ -464,8 +480,8 @@ function Dashboard() {
                   <CloudRain size={17} />
                   {nextWetHour ? (
                     <span>
-                      Next likely precipitation:{" "}
-                      <strong>{formatHour(nextWetHour.time, snapshot.timezone)}</strong> ·{" "}
+                      Next likely precipitation: {" "}
+                      <strong>{formatHour(nextWetHour.time, snapshot.timezone)}</strong> · {" "}
                       {nextWetHour.precipitationProbability.toFixed(0)}% probability
                     </span>
                   ) : (
@@ -571,6 +587,27 @@ function Dashboard() {
       </section>
     </main>
   );
+}
+
+function CloudSentinelPanels({ assessment, location }: { assessment: CloudSentinelAssessment; location: Location }) {
+  const riskClass = `risk-${assessment.forecast.severity.toLowerCase()}`;
+  const demoLabel = assessment.isDemo ? "Demo / simulation data" : "Live forecast analysis";
+  return <>
+    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Forecast / early warning</p><h2>What may happen next?</h2></div><span className="data-source">{demoLabel}</span></section>
+    <section className={`early-warning ${riskClass}`}>
+      <AlertTriangle size={25} /><div className="early-warning-main"><span className={`risk-tag ${riskClass}`}>{assessment.forecast.severity}</span><h2>{assessment.forecast.hazard}</h2><p>{assessment.forecast.explanation}</p><div className="forecast-chips">{assessment.forecast.measurements.map((item) => <span key={item}>{item}</span>)}</div></div>
+      <dl><div><dt>Period</dt><dd>{assessment.forecast.period}</dd></div><div><dt>Expected onset</dt><dd>{assessment.forecast.onset}</dd></div><div><dt>Confidence</dt><dd>{assessment.forecast.confidence}%</dd></div></dl>
+    </section>
+    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Live AWS / sensor intelligence</p><h2>What is happening now—and is the station reporting it correctly?</h2></div><span className="data-source">{assessment.isDemo ? "Demo AWS values" : "Live Open-Meteo observation"}</span></section>
+    <section className="aws-grid">{assessment.sensors.map((sensor) => <article className="aws-reading" key={sensor.name}><span>{sensor.name}</span><strong>{sensor.value}</strong><small>{sensor.quality}</small></article>)}</section>
+    <section className="cloud-grid">
+      <section className="panel sentinel-panel"><div className="panel-heading"><div><p className="panel-eyebrow">AWS sensor health</p><h2>Station validation</h2></div><ShieldCheck size={24} className="heading-icon" /></div><div className="sensor-health-list">{assessment.sensors.map((sensor) => <div key={sensor.name}><i className={`sensor-dot ${sensor.status.toLowerCase().replace(" ", "-")}`} /><span><strong>{sensor.name}</strong><small>{sensor.value} · {sensor.quality}</small></span><b>{sensor.status}</b></div>)}</div><p className="quality-path">Incoming observation → validation → anomaly detection → hazard assessment</p></section>
+      <section className="panel sentinel-panel"><div className="panel-heading"><div><p className="panel-eyebrow">Why this alert?</p><h2>Explainability</h2></div><span className="data-source">{assessment.explanation[0]?.source ?? "Model integration pending"}</span></div><p className="explanation-note">Contributors are shown only when supplied by the selected demo or the ML backend; placeholder values are not presented as live SHAP output.</p><div className="explanation-list">{assessment.explanation.map((item) => <div key={item.factor}><span className={item.direction}>{item.direction === "up" ? "↑" : "↓"}</span><p><strong>{item.factor}</strong>{item.detail}</p></div>)}</div></section>
+    </section>
+    {assessment.anomaly && <section className="correction-card"><div><p className="panel-eyebrow">Sensor anomaly / correction</p><h2>{assessment.anomaly.sensor}: {assessment.anomaly.status}</h2></div><div><span>Observed</span><strong className="observed-value">{assessment.anomaly.observed}</strong></div><div><span>Estimated / corrected</span><strong>{assessment.anomaly.estimated ?? "Not available"}</strong></div><div><span>Confidence</span><strong>{assessment.anomaly.confidence ? `${assessment.anomaly.confidence}%` : "Not available"}</strong></div><p>{assessment.anomaly.reason} <em>{assessment.anomaly.integration}</em></p></section>}
+    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Potential impact</p><h2>Potentially affected nearby assets</h2><p className="impact-disclaimer">Sample geospatial asset layer only. Assets indicate potential exposure, not guaranteed damage.</p></div><span className="data-source">{assessment.assets.length} assets to review</span></section>
+    {assessment.assets.length ? <section className="asset-panel panel"><div className="asset-map"><span className="map-point">●</span><strong>{location.name}</strong><small>MONITORING LOCATION</small>{assessment.assets.map((asset, index) => <span key={asset.name} className={`asset-point p${index}`}>● {asset.name}</span>)}</div><div className="asset-table">{assessment.assets.map((asset) => <article key={asset.name}><div><strong>{asset.name}</strong><span>{asset.type} · {asset.distanceKm} km away</span></div><p>{asset.exposure}</p><b className={`risk-tag risk-${asset.risk.toLowerCase()}`}>{asset.risk}</b></article>)}</div></section> : <section className="no-impact"><ShieldCheck size={22} /><span>No elevated nearby asset exposure is identified for this assessment.</span></section>}
+  </>;
 }
 
 function MetricCard({
