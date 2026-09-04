@@ -2,16 +2,18 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
+  Check,
   ChevronDown,
   CloudRain,
-  CloudSun,
-  Droplets,
+  Crosshair,
   Gauge,
   LocateFixed,
   MapPin,
   RefreshCw,
   Search,
   ShieldCheck,
+  Siren,
   ThermometerSun,
   Wind,
   type LucideIcon,
@@ -32,15 +34,16 @@ import { assessmentFromLive, demoScenarios, type CloudSentinelAssessment } from 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "HazardWatch — Live Weather Hazard Monitor" },
+      { title: "CloudSentinel — Predictive Weather Hazard Intelligence" },
       {
         name: "description",
-        content: "Live weather conditions, precipitation and threshold-based hazard monitoring.",
+        content:
+          "Forecast-driven early warning, AWS anomaly detection, sensor correction, explainability and impact awareness.",
       },
-      { property: "og:title", content: "HazardWatch — Live Weather Hazard Monitor" },
+      { property: "og:title", content: "CloudSentinel — Predictive Weather Hazard Intelligence" },
       {
         property: "og:description",
-        content: "Clear live weather conditions and practical, threshold-based hazard signals.",
+        content: "Predict the hazard. Detect the anomaly. Correct the sensor. Explain the decision.",
       },
     ],
   }),
@@ -61,7 +64,7 @@ type Hazard = {
   source: string;
 };
 
-type TimeMode = "morning" | "day" | "evening" | "night";
+type PillTone = "teal" | "amber" | "red" | "blue" | "violet";
 
 function Dashboard() {
   const [location, setLocation] = useState<Location>(defaultLocation);
@@ -80,12 +83,9 @@ function Dashboard() {
       setIsRefreshing(true);
       setError(null);
       try {
-        const data = await fetchWeather(target);
-        setSnapshot(data);
+        setSnapshot(await fetchWeather(target));
       } catch (caught) {
-        setError(
-          caught instanceof Error ? caught.message : "Live weather data could not be loaded.",
-        );
+        setError(caught instanceof Error ? caught.message : "Live weather data could not be loaded.");
       } finally {
         setIsRefreshing(false);
       }
@@ -95,13 +95,13 @@ function Dashboard() {
 
   useEffect(() => {
     void refresh(location);
-    const refreshId = window.setInterval(() => void refresh(location), 60_000);
-    return () => window.clearInterval(refreshId);
+    const id = window.setInterval(() => void refresh(location), 60_000);
+    return () => window.clearInterval(id);
   }, [location, refresh]);
 
   useEffect(() => {
-    const clockId = window.setInterval(() => setClock(new Date()), 1_000);
-    return () => window.clearInterval(clockId);
+    const id = window.setInterval(() => setClock(new Date()), 1000);
+    return () => window.clearInterval(id);
   }, []);
 
   const updateLocation = (next: Location) => {
@@ -110,24 +110,18 @@ function Dashboard() {
     setPlaceQuery(next.name);
     setLatitude(next.latitude.toFixed(4));
     setLongitude(next.longitude.toFixed(4));
+    setDemoScenario("live");
   };
 
   const searchPlace = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const term = placeQuery.trim();
-    if (!term) {
-      setError("Enter a place name to search.");
-      return;
-    }
+    if (!term) return setError("Enter a place name to search.");
     setIsSearching(true);
     setError(null);
     try {
-      const results = await searchLocations(term);
-      const match = results[0];
-      if (!match) {
-        setError(`No matching place was found for “${term}”. Try a city, town, or region name.`);
-        return;
-      }
+      const match = (await searchLocations(term))[0];
+      if (!match) return setError(`No matching place was found for “${term}”.`);
       updateLocation(match);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Location search failed.");
@@ -138,39 +132,20 @@ function Dashboard() {
 
   const submitCoordinates = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const nextLatitude = Number(latitude);
-    const nextLongitude = Number(longitude);
-    if (
-      !Number.isFinite(nextLatitude) ||
-      !Number.isFinite(nextLongitude) ||
-      Math.abs(nextLatitude) > 90 ||
-      Math.abs(nextLongitude) > 180
-    ) {
-      setError("Use a latitude from −90 to 90 and a longitude from −180 to 180.");
-      return;
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      return setError("Use a latitude from −90 to 90 and a longitude from −180 to 180.");
     }
-    updateLocation({
-      name: `${nextLatitude.toFixed(4)}°, ${nextLongitude.toFixed(4)}°`,
-      latitude: nextLatitude,
-      longitude: nextLongitude,
-    });
+    updateLocation({ name: `${lat.toFixed(4)}°, ${lon.toFixed(4)}°`, latitude: lat, longitude: lon });
   };
 
   const useDeviceLocation = () => {
-    if (!navigator.geolocation) {
-      setError("This browser does not provide device location.");
-      return;
-    }
+    if (!navigator.geolocation) return setError("This browser does not provide device location.");
     setError(null);
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        updateLocation({
-          name: "Your current location",
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        });
-      },
-      () => setError("Location access was not granted. You can enter coordinates instead."),
+      (position) => updateLocation({ name: "Your current location", latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      () => setError("Location access was not granted. Use coordinates instead."),
       { enableHighAccuracy: false, timeout: 10_000 },
     );
   };
@@ -183,658 +158,145 @@ function Dashboard() {
     retry: 1,
     staleTime: 55_000,
   });
-  const highestSeverity = hazards.some((hazard) => hazard.severity === "critical")
-    ? "critical"
-    : hazards.length > 0
-      ? "watch"
-      : "normal";
-  const forecastRain = snapshot?.hourly.reduce((total, item) => total + item.precipitation, 0) ?? 0;
-  const nextWetHour = snapshot?.hourly.find(
-    (hour) => hour.precipitationProbability >= 40 || hour.precipitation > 0.2,
-  );
-  const timeMode = getTimeMode(clock, snapshot?.timezone);
+
   const cloudSentinel = useMemo<CloudSentinelAssessment | null>(() => {
     if (!snapshot) return null;
     return demoScenario === "live" ? assessmentFromLive(snapshot) : demoScenarios[demoScenario] ?? assessmentFromLive(snapshot);
   }, [snapshot, demoScenario]);
 
+  const forecastRain = snapshot?.hourly.reduce((sum, hour) => sum + hour.precipitation, 0) ?? 0;
+  const nextWetHour = snapshot?.hourly.find((hour) => hour.precipitation > 1 || hour.precipitationProbability >= 50);
+  const topHazard = cloudSentinel?.forecast;
+  const systemState = topHazard?.severity === "Critical" ? "critical" : topHazard?.severity === "High" ? "high" : topHazard?.severity === "Moderate" ? "moderate" : "normal";
+
   return (
-    <main className={`hazard-app mode-${timeMode}`}>
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
+    <main className="cloud-app">
+      <div className="noise-layer" />
+      <div className="glow glow-a" />
+      <div className="glow glow-b" />
 
-      <section className="dashboard-shell">
-        <header className="topbar">
-          <div className="brand-lockup">
-            <div className="brand-mark" aria-hidden="true">
-              <ShieldCheck size={22} strokeWidth={2.2} />
-            </div>
-            <div>
-              <p className="eyebrow">Environmental intelligence</p>
-              <div className="brand-name">
-                Hazard<span>Watch</span>
-              </div>
-            </div>
+      <section className="app-shell">
+        <header className="nav-bar">
+          <div className="brand">
+            <div className="brand-icon"><ShieldCheck size={22} /></div>
+            <div><strong>CloudSentinel</strong><span>WEATHER HAZARD INTELLIGENCE</span></div>
           </div>
-
-          <div className="topbar-meta">
-            <div className="local-time">
-              <span className="meta-label">Current local time</span>
-              <strong>{formatClock(clock, snapshot?.timezone)}</strong>
-              <span>
-                {formatDate(clock, snapshot?.timezone)} · {timeMode} mode
-              </span>
-            </div>
-            <div className="live-indicator" aria-label="Live data updates every minute">
-              <span className="live-dot" />
-              <span>{isRefreshing ? "SYNCING" : "LIVE DATA"}</span>
-            </div>
+          <div className="nav-meta">
+            <span className="live-chip"><i /> {isRefreshing ? "SYNCING" : "LIVE"}</span>
+            <span>{formatClock(clock, snapshot?.timezone)}</span>
+            <span className="nav-location"><MapPin size={13} /> {location.name}</span>
           </div>
         </header>
 
-        <section className="hero-row">
-          <div>
-            <p className="eyebrow accent">Live hazard overview</p>
-            <h1>
-              Know what the weather is doing <em>right now.</em>
-            </h1>
-            <p className="hero-copy">
-              Live conditions and rainfall outlook, translated into clear weather hazard signals for
-              any monitored location.
-            </p>
-          </div>
-          <div className={`system-status status-${highestSeverity}`}>
-            <span className="status-kicker">Monitoring status</span>
-            <strong>
-              {highestSeverity === "normal"
-                ? "All clear"
-                : highestSeverity === "watch"
-                  ? "Keep watch"
-                  : "Action advised"}
-            </strong>
-            <span>
-              {hazards.length === 0
-                ? "No active threshold alerts"
-                : `${hazards.length} active threshold alert${hazards.length === 1 ? "" : "s"}`}
-            </span>
-          </div>
-        </section>
-
-        <section className="location-controls" aria-label="Choose monitoring location">
-          <form className="place-search" onSubmit={searchPlace}>
-            <label htmlFor="place">Monitor a place</label>
-            <div className="input-wrap">
-              <Search size={18} aria-hidden="true" />
-              <input
-                id="place"
-                value={placeQuery}
-                onChange={(event) => setPlaceQuery(event.target.value)}
-                placeholder="Search city or region"
-              />
-              <button className="primary-button" type="submit" disabled={isSearching}>
-                {isSearching ? "Finding…" : "Search"}
-              </button>
-            </div>
-          </form>
-          <div className="control-divider" />
-          <form className="coordinate-form" onSubmit={submitCoordinates}>
-            <label>Or use coordinates</label>
-            <input
-              aria-label="Latitude"
-              value={latitude}
-              onChange={(event) => setLatitude(event.target.value)}
-              inputMode="decimal"
-              placeholder="Latitude"
-            />
-            <input
-              aria-label="Longitude"
-              value={longitude}
-              onChange={(event) => setLongitude(event.target.value)}
-              inputMode="decimal"
-              placeholder="Longitude"
-            />
-            <button
-              className="icon-button"
-              type="button"
-              onClick={useDeviceLocation}
-              title="Use my location"
-              aria-label="Use my location"
-            >
-              <LocateFixed size={18} />
-            </button>
-            <button className="apply-button" type="submit">
-              Apply
-            </button>
-          </form>
-        </section>
-
-        <section className="simulation-controls" aria-label="CloudSentinel demonstration controls">
-          <div><p className="panel-eyebrow">Demo / simulation</p><span>Live Open-Meteo data remains available above. Simulations affect CloudSentinel assessment panels only.</span></div>
-          <label htmlFor="scenario">Assessment scenario</label>
-          <select id="scenario" value={demoScenario} onChange={(event) => setDemoScenario(event.target.value)}>
-            <option value="live">Live forecast assessment</option><option value="normal">Normal weather</option><option value="rain">Heavy rainfall warning</option><option value="wind">High wind warning</option><option value="sensor">Temperature sensor spike</option><option value="multiple">Multiple abnormal conditions</option>
-          </select>
-        </section>
-
-        {error && (
-          <div className="error-banner" role="alert">
-            <AlertTriangle size={18} />
-            <span>{error}</span>
-            <button type="button" onClick={() => void refresh()}>
-              <RefreshCw size={15} /> Retry
-            </button>
-          </div>
-        )}
-
-        <section className="location-heading" aria-live="polite">
-          <div className="location-title">
-            <MapPin size={21} />
-            <div>
-              <h2>{locationLabel(snapshot?.location ?? location)}</h2>
-              <p>
-                {snapshot
-                  ? `${formatCoordinates(snapshot.location)} · ${snapshot.timezoneAbbreviation}`
-                  : "Connecting to live weather service…"}
-              </p>
+        <section className="hero">
+          <div className="hero-copy-block">
+            <div className="section-kicker"><span className="kicker-line" /> PREDICTIVE WEATHER HAZARD INTELLIGENCE</div>
+            <h1>Predict the hazard.<br /><em>Before it becomes a problem.</em></h1>
+            <p>CloudSentinel combines forecast risk, automatic weather-station validation, explainable anomaly detection and exposure awareness in one operational view.</p>
+            <div className="flow-strip">
+              <FlowStep index="01" label="Predict" detail="forecast risk" tone="teal" />
+              <ArrowRight size={15} />
+              <FlowStep index="02" label="Detect" detail="AWS anomalies" tone="blue" />
+              <ArrowRight size={15} />
+              <FlowStep index="03" label="Correct" detail="faulty readings" tone="violet" />
+              <ArrowRight size={15} />
+              <FlowStep index="04" label="Explain" detail="XAI factors" tone="amber" />
+              <ArrowRight size={15} />
+              <FlowStep index="05" label="Assess" detail="asset exposure" tone="red" />
             </div>
           </div>
-          <div className="updated-at">
-            <span>Provider observation</span>
-            <strong>
-              {snapshot
-                ? formatTimestamp(snapshot.observedAt, snapshot.timezone)
-                : "Loading current conditions…"}
-            </strong>
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              disabled={isRefreshing}
-              aria-label="Refresh live weather data"
-            >
-              <RefreshCw size={15} className={isRefreshing ? "spinning" : ""} /> Refresh now
-            </button>
-            {snapshot && (
-              <details className="more-details">
-                <summary>
-                  More metrics <ChevronDown size={14} aria-hidden="true" />
-                </summary>
-                <div className="details-menu">
-                  <DetailItem
-                    label="Feels like"
-                    value={`${snapshot.apparentTemperature.toFixed(1)}°C`}
-                  />
-                  <DetailItem label="Rain now" value={`${snapshot.rain.toFixed(1)} mm`} />
-                  <DetailItem label="Wind gusts" value={`${snapshot.windGusts.toFixed(0)} km/h`} />
-                  <DetailItem
-                    label="Wind direction"
-                    value={`${directionLabel(snapshot.windDirection)} · ${snapshot.windDirection.toFixed(0)}°`}
-                  />
-                  <DetailItem label="Current state" value={describeWeather(snapshot.weatherCode)} />
-                  <DetailItem
-                    label="24h rain outlook"
-                    value={`${forecastRain.toFixed(1)} mm · up to ${Math.max(...snapshot.hourly.map((hour) => hour.precipitationProbability)).toFixed(0)}%`}
-                  />
-                </div>
-              </details>
-            )}
+          <div className={`command-card state-${systemState}`}>
+            <div className="command-head"><span>COMMAND STATUS</span><span>{locationLabel(snapshot?.location ?? location)}</span></div>
+            <div className="command-icon"><Siren size={24} /></div>
+            <span className="command-status">{topHazard?.severity ?? "—"}</span>
+            <h2>{topHazard?.hazard ?? "Loading forecast intelligence"}</h2>
+            <p>{topHazard?.explanation ?? "Connecting to the live forecast feed."}</p>
+            <div className="command-stats">
+              <div><span>WINDOW</span><strong>{topHazard?.period ?? "—"}</strong></div>
+              <div><span>ONSET</span><strong>{topHazard?.onset ?? "—"}</strong></div>
+              <div><span>SCREENING</span><strong>{topHazard?.confidence ?? "—"}%</strong></div>
+            </div>
           </div>
         </section>
 
-        {snapshot ? (
+        <section className="control-bar">
+          <form onSubmit={searchPlace} className="search-control"><Search size={16} /><input value={placeQuery} onChange={(e) => setPlaceQuery(e.target.value)} placeholder="Search city / region" /><button type="submit" disabled={isSearching}>{isSearching ? "Finding" : "Monitor"}</button></form>
+          <form onSubmit={submitCoordinates} className="coordinate-control"><input aria-label="Latitude" value={latitude} onChange={(e) => setLatitude(e.target.value)} /><input aria-label="Longitude" value={longitude} onChange={(e) => setLongitude(e.target.value)} /><button type="button" onClick={useDeviceLocation} title="Use current location"><LocateFixed size={16} /></button><button type="submit">Apply</button></form>
+          <div className="source-note"><span>LIVE SOURCE</span> Open-Meteo · refresh 60 s</div>
+        </section>
+
+        {error && <div className="error-strip"><AlertTriangle size={16} /> <span>{error}</span><button onClick={() => void refresh()}>Retry</button></div>}
+
+        {snapshot && cloudSentinel ? (
           <>
-            <section className="metric-grid" aria-label="Current weather conditions">
-              <MetricCard
-                icon={ThermometerSun}
-                label="Temperature"
-                value={snapshot.temperature.toFixed(1)}
-                unit="°C"
-                note={`Feels like ${snapshot.apparentTemperature.toFixed(1)}°C`}
-                tone="sun"
-              />
-              <MetricCard
-                icon={CloudRain}
-                label="Precipitation"
-                value={snapshot.precipitation.toFixed(1)}
-                unit="mm"
-                note={
-                  snapshot.rain > 0
-                    ? `${snapshot.rain.toFixed(1)} mm rain recorded`
-                    : "No rain in current interval"
-                }
-                tone="rain"
-              />
-              <MetricCard
-                icon={Droplets}
-                label="Humidity"
-                value={snapshot.humidity.toFixed(0)}
-                unit="%"
-                note="Relative humidity at 2 m"
-                tone="aqua"
-              />
-              <MetricCard
-                icon={Wind}
-                label="Wind speed"
-                value={snapshot.windSpeed.toFixed(0)}
-                unit="km/h"
-                note={`Gusts up to ${snapshot.windGusts.toFixed(0)} km/h`}
-                tone="wind"
-              />
-              <MetricCard
-                icon={Gauge}
-                label="Surface pressure"
-                value={snapshot.pressure.toFixed(0)}
-                unit="hPa"
-                note={`Wind ${directionLabel(snapshot.windDirection)}`}
-                tone="pressure"
-              />
+            <section className="section-block early-section">
+              <div className="section-head"><div><div className="section-kicker">01 / EARLY WARNING</div><h2>What may happen next?</h2><p>Forecast conditions are screened separately from live AWS observations.</p></div><ScenarioPicker value={demoScenario} onChange={setDemoScenario} /></div>
+              <div className="warning-grid">
+                <article className="warning-card primary-warning">
+                  <div className="warning-label"><span className={`status-dot severity-${topHazard?.severity?.toLowerCase()}`} /> EARLY WARNING · {topHazard?.source === "Demo simulation" ? "DEMO" : "LIVE FORECAST"}</div>
+                  <h3>{topHazard?.hazard}</h3>
+                  <p>{topHazard?.explanation}</p>
+                  <div className="warning-metrics">{topHazard?.measurements.map((m) => <span key={m}>{m}</span>)}</div>
+                </article>
+                <article className="warning-card timeline-card"><div className="mini-label">NEXT SIGNAL</div><strong>{nextWetHour ? formatHour(nextWetHour.time, snapshot.timezone) : topHazard?.onset ?? "—"}</strong><p>{nextWetHour ? `${nextWetHour.precipitationProbability.toFixed(0)}% precipitation probability` : "No elevated precipitation window identified."}</p><div className="timeline"><i /><i /><i /><i className="active" /><i /></div></article>
+                <article className="warning-card rain-total"><div className="mini-label">24H PRECIPITATION</div><strong>{forecastRain.toFixed(1)}<small> mm</small></strong><p>Forecast accumulation across the monitored window.</p></article>
+              </div>
             </section>
 
-            {cloudSentinel && <CloudSentinelPanels assessment={cloudSentinel} location={snapshot.location} />}
-
-            <section className="content-grid">
-              <section className="panel weather-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="panel-eyebrow">Current situation</p>
-                    <h2>{describeWeather(snapshot.weatherCode)}</h2>
-                  </div>
-                  <CloudSun size={29} className="heading-icon" />
-                </div>
-                <div className="weather-summary">
-                  <div className="condition-temperature">
-                    {snapshot.temperature.toFixed(0)}
-                    <span>°</span>
-                  </div>
-                  <div>
-                    <p>{snapshot.isDay ? "Daylight conditions" : "Night conditions"}</p>
-                    <strong>
-                      Apparent temperature {snapshot.apparentTemperature.toFixed(1)}°C
-                    </strong>
-                    <span>Observed {formatTimestamp(snapshot.observedAt, snapshot.timezone)}</span>
-                  </div>
-                </div>
-                <div className="weather-facts">
-                  <Fact
-                    label="Precipitation now"
-                    value={`${snapshot.precipitation.toFixed(1)} mm`}
-                  />
-                  <Fact label="Rain now" value={`${snapshot.rain.toFixed(1)} mm`} />
-                  <Fact label="Wind gusts" value={`${snapshot.windGusts.toFixed(0)} km/h`} />
-                  <Fact label="Pressure" value={`${snapshot.pressure.toFixed(0)} hPa`} />
-                </div>
-              </section>
-
-              <section className="panel precipitation-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="panel-eyebrow">Next 24 hours</p>
-                    <h2>Precipitation outlook</h2>
-                  </div>
-                  <div className="forecast-total">
-                    <strong>{forecastRain.toFixed(1)} mm</strong>
-                    <span>forecast total</span>
-                  </div>
-                </div>
-                <PrecipitationChart readings={snapshot.hourly} timezone={snapshot.timezone} />
-                <div className="forecast-note">
-                  <CloudRain size={17} />
-                  {nextWetHour ? (
-                    <span>
-                      Next likely precipitation: {" "}
-                      <strong>{formatHour(nextWetHour.time, snapshot.timezone)}</strong> · {" "}
-                      {nextWetHour.precipitationProbability.toFixed(0)}% probability
-                    </span>
-                  ) : (
-                    <span>No notable precipitation signal in the next 24 hours.</span>
-                  )}
-                </div>
-              </section>
+            <section className="section-block">
+              <div className="section-head"><div><div className="section-kicker">02 / AWS SENSOR INTELLIGENCE</div><h2>Is the station reporting reality?</h2><p>Live observations are validated independently from the forecast layer.</p></div><span className="live-badge"><i /> {cloudSentinel.isDemo ? "SIMULATION" : "LIVE OBSERVATION"}</span></div>
+              <div className="sensor-topline"><Metric label="Temperature" value={`${cloudSentinel.observation.temperature.toFixed(1)} °C`} note="2 m air temperature" icon={ThermometerSun} tone="teal" /><Metric label="Humidity" value={`${cloudSentinel.observation.humidity.toFixed(0)} %`} note="Relative humidity" icon={Activity} tone="blue" /><Metric label="Pressure" value={`${cloudSentinel.observation.pressureMsl.toFixed(0)} hPa`} note="Mean sea level" icon={Gauge} tone="violet" /><Metric label="Wind" value={`${cloudSentinel.observation.windSpeed.toFixed(0)} km/h`} note={`Gusts ${cloudSentinel.observation.windGusts.toFixed(0)} km/h`} icon={Wind} tone="amber" /><Metric label="Precipitation" value={`${cloudSentinel.observation.precipitation.toFixed(1)} mm`} note="Current interval" icon={CloudRain} tone="red" /></div>
+              <div className="sensor-grid"><article className="panel sensor-panel"><div className="panel-title"><div><span>STATION HEALTH</span><h3>Signal validation</h3></div><ShieldCheck size={18} /></div><div className="health-list">{cloudSentinel.sensors.map((sensor) => <div key={sensor.name}><span className={`health-dot ${sensor.quality.toLowerCase()}`} /><div><strong>{sensor.name}</strong><small>{sensor.value}</small></div><em>{sensor.status}</em></div>)}</div><div className="pipeline"><span>INGEST</span><ArrowRight size={13}/><span>VALIDATE</span><ArrowRight size={13}/><span>DETECT</span><ArrowRight size={13}/><span>ASSESS</span></div></article><article className="panel anomaly-panel">{cloudSentinel.anomaly ? <><div className="panel-title"><div><span>SENSOR ANOMALY</span><h3>{cloudSentinel.anomaly.sensor} reading isolated</h3></div><AlertTriangle size={20}/></div><div className="anomaly-numbers"><div><small>OBSERVED</small><strong>{cloudSentinel.anomaly.observed}</strong></div><ArrowRight /><div><small>ESTIMATED / CORRECTED</small><strong>{cloudSentinel.anomaly.estimated ?? "Not available"}</strong></div></div><div className="confidence-row"><span>LIKELY SENSOR FAULT</span><strong>{cloudSentinel.anomaly.confidence}% confidence</strong></div><p>{cloudSentinel.anomaly.reason}</p><small className="demo-disclaimer">Demo adapter: estimated value is illustrative until the live correction endpoint is connected.</small></> : <><div className="panel-title"><div><span>NO CORRECTION EVENT</span><h3>Current readings pass screening</h3></div><Check size={20}/></div><p className="panel-body-copy">No sensor correction is shown for the live stream because the current ML endpoint returns anomaly status and factors, not a corrected replacement observation.</p><div className="model-hook">ML STATUS <strong>{mlAssessment.data?.status ?? "Awaiting endpoint"}</strong><span>{mlAssessment.isError ? "Endpoint not configured" : mlAssessment.data ? `Score ${mlAssessment.data.anomalyScore.toFixed(2)}` : "—"}</span></div></>}</article></div>
             </section>
 
-            <section className="bottom-grid">
-              <section className="panel alerts-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="panel-eyebrow">Rule-based monitor</p>
-                    <h2>Hazard signals</h2>
-                  </div>
-                  <Activity size={25} className="heading-icon" />
-                </div>
-                {hazards.length ? (
-                  <div className="hazard-list">
-                    {hazards.map((hazard) => (
-                      <HazardRow key={hazard.title} hazard={hazard} />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="clear-state">
-                    <ShieldCheck size={24} />
-                    <div>
-                      <strong>No thresholds are exceeded.</strong>
-                      <span>
-                        Temperature, precipitation, wind, and pressure are currently within the
-                        monitor’s baseline range.
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </section>
+            <section className="section-block">
+              <div className="section-head"><div><div className="section-kicker">03 / EXPLAINABILITY</div><h2>Why did CloudSentinel flag this?</h2><p>Only factors available from the connected model or the selected demo are shown.</p></div><span className="xai-chip">XAI / SHAP READY</span></div>
+              <div className="xai-grid">{cloudSentinel.explanation.map((item) => <article className="xai-card" key={item.factor}><div className={`direction ${item.direction}`}>{item.direction === "up" ? "↑" : "↓"}</div><div><span>{item.source === "Demo adapter" ? "DEMO FACTOR" : "MODEL HOOK"}</span><h3>{item.factor}</h3><p>{item.detail}</p></div></article>)}</div>
+            </section>
 
-              <section className="panel ml-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="panel-eyebrow">AI autoencoder</p>
-                    <h2>Anomaly detection</h2>
-                  </div>
-                  <Activity size={25} className="heading-icon" />
-                </div>
-                {mlAssessment.isLoading ? (
-                  <div className="clear-state">
-                    <span>Scoring current conditions…</span>
-                  </div>
-                ) : mlAssessment.isError ? (
-                  <div className="clear-state">
-                    <AlertTriangle size={24} />
-                    <div>
-                      <strong>AI analysis unavailable.</strong>
-                      <span>Rule-based signals above are still live.</span>
-                    </div>
-                  </div>
-                ) : mlAssessment.data?.status === "Hazard" ? (
-                  <div className="hazard-list">
-                    <HazardRow
-                      hazard={{
-                        title: "Anomalous conditions detected",
-                        detail: `Reconstruction anomaly score ${mlAssessment.data.anomalyScore.toFixed(2)}. Top factors: ${mlAssessment.data.triggerFactors.join(", ")}.`,
-                        severity: mlAssessment.data.anomalyScore > 0.8 ? "critical" : "watch",
-                        source: "AI",
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="clear-state">
-                    <ShieldCheck size={24} />
-                    <div>
-                      <strong>No anomaly detected by the model.</strong>
-                      <span>
-                        Anomaly score {mlAssessment.data?.anomalyScore.toFixed(2) ?? "—"} is within
-                        the learned normal range.
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </section>
+            <section className="section-block impact-section">
+              <div className="section-head"><div><div className="section-kicker">04 / POTENTIAL IMPACT</div><h2>What could be affected nearby?</h2><p>Exposure screening helps teams decide what to review next — it does not guarantee damage.</p></div><span className="xai-chip">ILLUSTRATIVE ASSET LAYER</span></div>
+              {cloudSentinel.assets.length ? <div className="impact-grid"><article className="impact-map panel"><div className="map-grid" /><div className="map-center"><Crosshair size={18}/><span>MONITORED LOCATION</span></div>{cloudSentinel.assets.map((asset, index) => <div className={`asset-pin pin-${index}`} key={asset.name}><i /><span>{asset.name}</span></div>)}<div className="map-caption">Potential exposure zones · relative positions for demonstration</div></article><article className="impact-list">{cloudSentinel.assets.map((asset) => <div className="asset-row" key={asset.name}><div className="asset-icon"><MapPin size={16}/></div><div><strong>{asset.name}</strong><span>{asset.type} · {asset.distanceKm} km</span><p>{asset.exposure}</p></div><b className={`risk risk-${asset.risk.toLowerCase()}`}>{asset.risk}</b></div>)}</article></div> : <div className="no-impact panel"><ShieldCheck size={22}/><div><strong>No elevated exposure layer shown.</strong><span>The selected assessment does not currently trigger the illustrative asset layer.</span></div></div>}
+            </section>
+
+            <section className="section-block final-strip">
+              <div><div className="section-kicker">05 / DECISION VIEW</div><h2>One screen. One operational story.</h2><p>Forecast risk, station integrity, explainability and exposure stay visibly separate so a judge can see what is live, what is simulated and what still needs backend integration.</p></div><div className="decision-badges"><span><Check size={14}/> Forecast layer</span><span><Check size={14}/> AWS validation</span><span><Check size={14}/> XAI pathway</span><span><Check size={14}/> Impact screening</span></div>
             </section>
           </>
         ) : (
-          <section className="loading-card" aria-busy="true">
-            <span className="loading-orb" />
-            <div>
-              <strong>Loading live weather conditions</strong>
-              <span>Connecting to the weather service for {locationLabel(location)}…</span>
-            </div>
-          </section>
+          <div className="loading-state"><RefreshCw className="spin" size={20}/><div><strong>Connecting to live weather intelligence</strong><span>Loading forecast and current observation data for {locationLabel(location)}.</span></div></div>
         )}
 
-        <footer className="dashboard-footer">
-          <span>
-            HazardWatch provides weather-awareness signals, not official emergency warnings.
-          </span>
-          <span>
-            Last interface refresh: {formatTimestamp(clock.getTime(), snapshot?.timezone)}
-          </span>
-        </footer>
+        <footer className="footer"><span>CloudSentinel · SIH 2026 · Disaster Management</span><span>Weather-awareness and screening tool — not an official emergency alert system.</span></footer>
       </section>
     </main>
   );
 }
 
-function CloudSentinelPanels({ assessment, location }: { assessment: CloudSentinelAssessment; location: Location }) {
-  const riskClass = `risk-${assessment.forecast.severity.toLowerCase()}`;
-  const demoLabel = assessment.isDemo ? "Demo / simulation data" : "Live forecast analysis";
-  return <>
-    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Forecast / early warning</p><h2>What may happen next?</h2></div><span className="data-source">{demoLabel}</span></section>
-    <section className={`early-warning ${riskClass}`}>
-      <AlertTriangle size={25} /><div className="early-warning-main"><span className={`risk-tag ${riskClass}`}>{assessment.forecast.severity}</span><h2>{assessment.forecast.hazard}</h2><p>{assessment.forecast.explanation}</p><div className="forecast-chips">{assessment.forecast.measurements.map((item) => <span key={item}>{item}</span>)}</div></div>
-      <dl><div><dt>Period</dt><dd>{assessment.forecast.period}</dd></div><div><dt>Expected onset</dt><dd>{assessment.forecast.onset}</dd></div><div><dt>Confidence</dt><dd>{assessment.forecast.confidence}%</dd></div></dl>
-    </section>
-    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Live AWS / sensor intelligence</p><h2>What is happening now—and is the station reporting it correctly?</h2></div><span className="data-source">{assessment.isDemo ? "Demo AWS values" : "Live Open-Meteo observation"}</span></section>
-    <section className="aws-grid">{assessment.sensors.map((sensor) => <article className="aws-reading" key={sensor.name}><span>{sensor.name}</span><strong>{sensor.value}</strong><small>{sensor.quality}</small></article>)}</section>
-    <section className="cloud-grid">
-      <section className="panel sentinel-panel"><div className="panel-heading"><div><p className="panel-eyebrow">AWS sensor health</p><h2>Station validation</h2></div><ShieldCheck size={24} className="heading-icon" /></div><div className="sensor-health-list">{assessment.sensors.map((sensor) => <div key={sensor.name}><i className={`sensor-dot ${sensor.status.toLowerCase().replace(" ", "-")}`} /><span><strong>{sensor.name}</strong><small>{sensor.value} · {sensor.quality}</small></span><b>{sensor.status}</b></div>)}</div><p className="quality-path">Incoming observation → validation → anomaly detection → hazard assessment</p></section>
-      <section className="panel sentinel-panel"><div className="panel-heading"><div><p className="panel-eyebrow">Why this alert?</p><h2>Explainability</h2></div><span className="data-source">{assessment.explanation[0]?.source ?? "Model integration pending"}</span></div><p className="explanation-note">Contributors are shown only when supplied by the selected demo or the ML backend; placeholder values are not presented as live SHAP output.</p><div className="explanation-list">{assessment.explanation.map((item) => <div key={item.factor}><span className={item.direction}>{item.direction === "up" ? "↑" : "↓"}</span><p><strong>{item.factor}</strong>{item.detail}</p></div>)}</div></section>
-    </section>
-    {assessment.anomaly && <section className="correction-card"><div><p className="panel-eyebrow">Sensor anomaly / correction</p><h2>{assessment.anomaly.sensor}: {assessment.anomaly.status}</h2></div><div><span>Observed</span><strong className="observed-value">{assessment.anomaly.observed}</strong></div><div><span>Estimated / corrected</span><strong>{assessment.anomaly.estimated ?? "Not available"}</strong></div><div><span>Confidence</span><strong>{assessment.anomaly.confidence ? `${assessment.anomaly.confidence}%` : "Not available"}</strong></div><p>{assessment.anomaly.reason} <em>{assessment.anomaly.integration}</em></p></section>}
-    <section className="cloud-section-heading"><div><p className="panel-eyebrow">Potential impact</p><h2>Potentially affected nearby assets</h2><p className="impact-disclaimer">Sample geospatial asset layer only. Assets indicate potential exposure, not guaranteed damage.</p></div><span className="data-source">{assessment.assets.length} assets to review</span></section>
-    {assessment.assets.length ? <section className="asset-panel panel"><div className="asset-map"><span className="map-point">●</span><strong>{location.name}</strong><small>MONITORING LOCATION</small>{assessment.assets.map((asset, index) => <span key={asset.name} className={`asset-point p${index}`}>● {asset.name}</span>)}</div><div className="asset-table">{assessment.assets.map((asset) => <article key={asset.name}><div><strong>{asset.name}</strong><span>{asset.type} · {asset.distanceKm} km away</span></div><p>{asset.exposure}</p><b className={`risk-tag risk-${asset.risk.toLowerCase()}`}>{asset.risk}</b></article>)}</div></section> : <section className="no-impact"><ShieldCheck size={22} /><span>No elevated nearby asset exposure is identified for this assessment.</span></section>}
-  </>;
+function ScenarioPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <label className="scenario-picker"><span>DEMO / SIMULATION</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="live">Live forecast assessment</option><option value="normal">Normal weather</option><option value="rain">Heavy rainfall warning</option><option value="wind">High wind warning</option><option value="sensor">Temperature sensor spike</option><option value="multiple">Multiple abnormal conditions</option></select><ChevronDown size={14}/></label>;
 }
 
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  unit,
-  note,
-  tone,
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  unit: string;
-  note: string;
-  tone: string;
-}) {
-  return (
-    <article className={`metric-card tone-${tone}`}>
-      <div className="metric-icon">
-        <Icon size={20} />
-      </div>
-      <p>{label}</p>
-      <div className="metric-value">
-        {value}
-        <span>{unit}</span>
-      </div>
-      <small>{note}</small>
-    </article>
-  );
+function FlowStep({ index, label, detail, tone }: { index: string; label: string; detail: string; tone: PillTone }) {
+  return <div className={`flow-step tone-${tone}`}><small>{index}</small><div><strong>{label}</strong><span>{detail}</span></div></div>;
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="detail-item">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function HazardRow({ hazard }: { hazard: Hazard }) {
-  return (
-    <article className={`hazard-row hazard-${hazard.severity}`}>
-      <span className="hazard-symbol">
-        <AlertTriangle size={18} />
-      </span>
-      <div>
-        <strong>{hazard.title}</strong>
-        <p>{hazard.detail}</p>
-      </div>
-      <span className="hazard-source">{hazard.source}</span>
-    </article>
-  );
-}
-
-function PrecipitationChart({
-  readings,
-  timezone,
-}: {
-  readings: WeatherSnapshot["hourly"];
-  timezone: string;
-}) {
-  const maxValue = Math.max(1, ...readings.map((reading) => reading.precipitation));
-  return (
-    <div className="rain-chart" aria-label="Hourly precipitation forecast">
-      <div className="chart-gridline chart-gridline-top" />
-      <div className="chart-gridline chart-gridline-mid" />
-      <div className="chart-gridline chart-gridline-bottom" />
-      <div className="chart-bars">
-        {readings.map((reading, index) => {
-          const isLabelled = index === 0 || index === readings.length - 1 || index % 4 === 0;
-          const height = Math.max(
-            reading.precipitation > 0 ? 8 : 2,
-            (reading.precipitation / maxValue) * 100,
-          );
-          return (
-            <div
-              className="chart-column"
-              key={reading.time}
-              title={`${formatHour(reading.time, timezone)}: ${reading.precipitation.toFixed(1)} mm, ${reading.precipitationProbability.toFixed(0)}% probability`}
-            >
-              <span className="chart-value">
-                {reading.precipitation > 0 ? reading.precipitation.toFixed(1) : ""}
-              </span>
-              <div className="bar-track">
-                <div className="bar-fill" style={{ height: `${height}%` }} />
-              </div>
-              <span className="chart-label">
-                {isLabelled ? formatHour(reading.time, timezone) : ""}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+function Metric({ label, value, note, icon: Icon, tone }: { label: string; value: string; note: string; icon: LucideIcon; tone: PillTone }) {
+  return <article className={`metric-card tone-${tone}`}><div className="metric-icon"><Icon size={16}/></div><span>{label}</span><strong>{value}</strong><small>{note}</small></article>;
 }
 
 function getHazards(snapshot: WeatherSnapshot): Hazard[] {
   const alerts: Hazard[] = [];
-  if (snapshot.precipitation >= 7)
-    alerts.push({
-      title: "Heavy precipitation",
-      detail: `${snapshot.precipitation.toFixed(1)} mm is recorded in the current weather interval. Check drainage and local flood advisories.`,
-      severity: "critical",
-      source: "RAIN",
-    });
-  else if (snapshot.precipitation >= 2)
-    alerts.push({
-      title: "Steady precipitation",
-      detail: `${snapshot.precipitation.toFixed(1)} mm is recorded in the current weather interval. Monitor changing road and surface conditions.`,
-      severity: "watch",
-      source: "RAIN",
-    });
-  if (snapshot.windGusts >= 70)
-    alerts.push({
-      title: "Strong wind gusts",
-      detail: `Peak gusts are ${snapshot.windGusts.toFixed(0)} km/h. Secure exposed equipment and review local wind guidance.`,
-      severity: "critical",
-      source: "WIND",
-    });
-  else if (snapshot.windGusts >= 50)
-    alerts.push({
-      title: "Gusty conditions",
-      detail: `Peak gusts are ${snapshot.windGusts.toFixed(0)} km/h. Outdoor work and travel may need extra care.`,
-      severity: "watch",
-      source: "WIND",
-    });
-  if (snapshot.apparentTemperature >= 42)
-    alerts.push({
-      title: "Extreme heat stress",
-      detail: `Apparent temperature is ${snapshot.apparentTemperature.toFixed(1)}°C. Prioritise shade, hydration, and heat safety procedures.`,
-      severity: "critical",
-      source: "HEAT",
-    });
-  else if (snapshot.apparentTemperature >= 36)
-    alerts.push({
-      title: "Elevated heat stress",
-      detail: `Apparent temperature is ${snapshot.apparentTemperature.toFixed(1)}°C. Plan hydration and rest breaks for prolonged outdoor activity.`,
-      severity: "watch",
-      source: "HEAT",
-    });
-  if (snapshot.pressure < 985)
-    alerts.push({
-      title: "Low-pressure pattern",
-      detail: `Surface pressure is ${snapshot.pressure.toFixed(0)} hPa. Watch for rapidly evolving local weather.`,
-      severity: "watch",
-      source: "PRESSURE",
-    });
+  if (snapshot.precipitation >= 7) alerts.push({ title: "Heavy precipitation", detail: `${snapshot.precipitation.toFixed(1)} mm recorded in the current interval. Review local drainage and flood guidance.`, severity: "critical", source: "RAIN" });
+  else if (snapshot.precipitation >= 2) alerts.push({ title: "Steady precipitation", detail: `${snapshot.precipitation.toFixed(1)} mm recorded in the current interval. Monitor surface conditions.`, severity: "watch", source: "RAIN" });
+  if (snapshot.windGusts >= 70) alerts.push({ title: "Strong wind gusts", detail: `Peak gusts are ${snapshot.windGusts.toFixed(0)} km/h. Review exposed equipment and wind guidance.`, severity: "critical", source: "WIND" });
+  else if (snapshot.windGusts >= 50) alerts.push({ title: "Gusty conditions", detail: `Peak gusts are ${snapshot.windGusts.toFixed(0)} km/h. Outdoor operations may need extra care.`, severity: "watch", source: "WIND" });
+  if (snapshot.apparentTemperature >= 42) alerts.push({ title: "Extreme heat stress", detail: `Apparent temperature is ${snapshot.apparentTemperature.toFixed(1)}°C. Apply heat-safety procedures.`, severity: "critical", source: "HEAT" });
+  else if (snapshot.apparentTemperature >= 36) alerts.push({ title: "Elevated heat stress", detail: `Apparent temperature is ${snapshot.apparentTemperature.toFixed(1)}°C. Plan hydration and rest.`, severity: "watch", source: "HEAT" });
+  if (snapshot.pressure < 985) alerts.push({ title: "Low-pressure pattern", detail: `Surface pressure is ${snapshot.pressure.toFixed(0)} hPa. Watch for rapidly evolving conditions.`, severity: "watch", source: "PRESSURE" });
   return alerts;
 }
 
-function locationLabel(location: Location): string {
-  return [location.name, location.admin1, location.country].filter(Boolean).join(", ");
-}
-
-function formatCoordinates(location: Location): string {
-  return `${location.latitude.toFixed(4)}°, ${location.longitude.toFixed(4)}°`;
-}
-
-function formatClock(date: Date, timezone = "UTC"): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZone: timezone,
-  }).format(date);
-}
-
-function formatDate(date: Date, timezone = "UTC"): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-    timeZone: timezone,
-  }).format(date);
-}
-
-function formatTimestamp(timestamp: number, timezone = "UTC"): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZone: timezone,
-  }).format(new Date(timestamp));
-}
-
-function formatHour(timestamp: number, timezone: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    hour12: false,
-    timeZone: timezone,
-  }).format(new Date(timestamp));
-}
-
-function getTimeMode(date: Date, timezone = "UTC"): TimeMode {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-GB", {
-      hour: "2-digit",
-      hourCycle: "h23",
-      timeZone: timezone,
-    }).format(date),
-  );
-
-  if (hour >= 5 && hour < 11) return "morning";
-  if (hour >= 11 && hour < 17) return "day";
-  if (hour >= 17 && hour < 21) return "evening";
-  return "night";
-}
-
-function directionLabel(degrees: number): string {
-  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  return directions[Math.round(degrees / 45) % 8] ?? "N";
-}
+function locationLabel(location: Location): string { return [location.name, location.admin1, location.country].filter(Boolean).join(", "); }
+function formatClock(date: Date, timezone = "UTC"): string { return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: timezone }).format(date); }
+function formatHour(timestamp: number, timezone: string): string { return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: timezone }).format(new Date(timestamp)); }
