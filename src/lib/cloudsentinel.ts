@@ -1,5 +1,6 @@
 import type { WeatherSnapshot } from "./weather";
 
+// CloudSentinel integration layer: live forecast screening + clearly labelled demo scenarios.
 export type Severity = "Low" | "Moderate" | "High" | "Critical";
 export type SensorStatus = "Normal" | "Warning" | "Anomaly" | "Sensor Fault" | "Corrected";
 export interface WeatherObservation { temperature: number; humidity: number; pressureMsl: number; windSpeed: number; windGusts: number; precipitation: number; cloudCover: number; observedAt: number; source: "Live Open-Meteo" | "Demo simulation"; }
